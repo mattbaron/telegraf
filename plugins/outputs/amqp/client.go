@@ -36,12 +36,14 @@ type client struct {
 	conn    *amqp.Connection
 	channel *amqp.Channel
 	config  *ClientConfig
+	blocked bool
 }
 
 // newClient opens a connection to one of the brokers at random
 func newClient(config *ClientConfig) (*client, error) {
 	client := &client{
-		config: config,
+		config:  config,
+		blocked: false,
 	}
 
 	p := rand.Perm(len(config.brokers))
@@ -67,6 +69,19 @@ func newClient(config *ClientConfig) (*client, error) {
 	if client.conn == nil {
 		return nil, errors.New("could not connect to any broker")
 	}
+
+	blocks := client.conn.NotifyBlocked(make(chan amqp.Blocking))
+	go func() {
+		for b := range blocks {
+			if b.Active {
+				config.log.Errorf("connection is blocked: %q", b.Reason)
+				client.blocked = true
+			} else {
+				config.log.Info("connection is unblocked")
+				client.blocked = false
+			}
+		}
+	}()
 
 	channel, err := client.conn.Channel()
 	if err != nil {
@@ -113,6 +128,10 @@ func (c *client) DeclareExchange() error {
 		return fmt.Errorf("error declaring exchange: %w", err)
 	}
 	return nil
+}
+
+func (c *client) Blocked() bool {
+	return c.blocked
 }
 
 func (c *client) Publish(key string, body []byte) error {

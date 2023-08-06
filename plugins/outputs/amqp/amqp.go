@@ -78,6 +78,7 @@ type AMQP struct {
 type Client interface {
 	Publish(key string, body []byte) error
 	Close() error
+	Blocked() bool
 }
 
 func (*AMQP) SampleConfig() string {
@@ -129,6 +130,10 @@ func (q *AMQP) routingKey(metric telegraf.Metric) string {
 }
 
 func (q *AMQP) Write(metrics []telegraf.Metric) error {
+	if q.client != nil && q.client.Blocked() {
+		return errors.New("connection is blocked")
+	}
+
 	batches := make(map[string][]telegraf.Metric)
 	if q.ExchangeType == "header" {
 		// Since the routing_key is ignored for this exchange type send as a

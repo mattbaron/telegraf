@@ -70,16 +70,26 @@ func newClient(config *ClientConfig) (*client, error) {
 		return nil, errors.New("could not connect to any broker")
 	}
 
+	// Detect when the server "blocks" the connection to do memory, disk, etc.
+	// issues.  See: https://www.rabbitmq.com/connection-blocked.html
 	blocks := client.conn.NotifyBlocked(make(chan amqp.Blocking))
 	go func() {
 		for b := range blocks {
 			if b.Active {
-				config.log.Errorf("connection is blocked: %q", b.Reason)
+				config.log.Errorf("amqp connection is blocked: %q", b.Reason)
 				client.blocked = true
 			} else {
-				config.log.Info("connection is unblocked")
+				config.log.Info("amqp connection is unblocked")
 				client.blocked = false
 			}
+		}
+	}()
+
+	notifications := client.conn.NotifyClose(make(chan *amqp.Error))
+	go func() {
+		for n := range notifications {
+			config.log.Errorf("amqp connection closed: %s", n.Reason)
+			client.blocked = false
 		}
 	}()
 
@@ -130,8 +140,12 @@ func (c *client) DeclareExchange() error {
 	return nil
 }
 
-func (c *client) Blocked() bool {
-	return c.blocked
+func (c *client) IsBlocked() bool {
+	return c.IsConnected() && c.blocked
+}
+
+func (c *client) IsConnected() bool {
+	return c.conn != nil && !c.conn.IsClosed()
 }
 
 func (c *client) Publish(key string, body []byte) error {
@@ -153,6 +167,8 @@ func (c *client) Publish(key string, body []byte) error {
 }
 
 func (c *client) Close() error {
+	c.blocked = false
+
 	if c.conn == nil {
 		return nil
 	}

@@ -10,13 +10,15 @@ import (
 )
 
 type MockClient struct {
-	PublishF func(key string, body []byte) error
-	CloseF   func() error
-	BlockedF func() bool
+	PublishF     func(key string, body []byte) error
+	CloseF       func() error
+	IsBlockedF   func() bool
+	IsConnectedF func() bool
 
-	PublishCallCount int
-	CloseCallCount   int
-	BlockedCallCount int
+	PublishCallCount     int
+	CloseCallCount       int
+	IsBlockedCallCount   int
+	IsConnectedCallCount int
 }
 
 func (c *MockClient) Publish(key string, body []byte) error {
@@ -29,9 +31,14 @@ func (c *MockClient) Close() error {
 	return c.CloseF()
 }
 
-func (c *MockClient) Blocked() bool {
-	c.CloseCallCount++
-	return c.BlockedF()
+func (c *MockClient) IsBlocked() bool {
+	c.IsBlockedCallCount++
+	return c.IsBlockedF()
+}
+
+func (c *MockClient) IsConnected() bool {
+	c.IsConnectedCallCount++
+	return c.IsConnectedF()
 }
 
 func NewMockClient() Client {
@@ -42,7 +49,10 @@ func NewMockClient() Client {
 		CloseF: func() error {
 			return nil
 		},
-		BlockedF: func() bool {
+		IsBlockedF: func() bool {
+			return false
+		},
+		IsConnectedF: func() bool {
 			return false
 		},
 	}

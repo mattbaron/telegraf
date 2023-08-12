@@ -68,7 +68,6 @@ type AMQP struct {
 	proxy.TCPProxy
 
 	serializer   serializers.Serializer
-	connect      func(*ClientConfig) (Client, error)
 	client       Client
 	config       *ClientConfig
 	sentMessages int
@@ -78,7 +77,8 @@ type AMQP struct {
 type Client interface {
 	Publish(key string, body []byte) error
 	Close() error
-	Blocked() bool
+	IsBlocked() bool
+	IsConnected() bool
 }
 
 func (*AMQP) SampleConfig() string {
@@ -104,7 +104,7 @@ func (q *AMQP) Connect() error {
 		return err
 	}
 
-	q.client, err = q.connect(q.config)
+	err = q.connect()
 	if err != nil {
 		return err
 	}
@@ -130,8 +130,15 @@ func (q *AMQP) routingKey(metric telegraf.Metric) string {
 }
 
 func (q *AMQP) Write(metrics []telegraf.Metric) error {
-	if q.client != nil && q.client.Blocked() {
-		return errors.New("connection is blocked")
+	if q.client == nil || !q.client.IsConnected() {
+		err := q.connect()
+		if err != nil {
+			return err
+		}
+	}
+
+	if q.client != nil && q.client.IsBlocked() {
+		return errors.New("amqp connection is blocked")
 	}
 
 	batches := make(map[string][]telegraf.Metric)
@@ -150,7 +157,6 @@ func (q *AMQP) Write(metrics []telegraf.Metric) error {
 		}
 	}
 
-	first := true
 	for key, metrics := range batches {
 		body, err := q.serialize(metrics)
 		if err != nil {
@@ -164,9 +170,6 @@ func (q *AMQP) Write(metrics []telegraf.Metric) error {
 
 		err = q.publish(key, body)
 		if err != nil {
-			// If this is the first attempt to publish and the connection is
-			// closed, try to reconnect and retry once.
-
 			var aerr *amqp.Error
 			if first && errors.As(err, &aerr) && errors.Is(aerr, amqp.ErrClosed) {
 				q.client = nil
@@ -198,12 +201,10 @@ func (q *AMQP) Write(metrics []telegraf.Metric) error {
 
 func (q *AMQP) publish(key string, body []byte) error {
 	if q.client == nil {
-		client, err := q.connect(q.config)
+		err := q.connect()
 		if err != nil {
 			return err
 		}
-		q.sentMessages = 0
-		q.client = client
 	}
 
 	err := q.client.Publish(key, body)
@@ -324,8 +325,18 @@ func (q *AMQP) makeClientConfig() (*ClientConfig, error) {
 	return clientConfig, nil
 }
 
-func connect(clientConfig *ClientConfig) (Client, error) {
-	return newClient(clientConfig)
+func (q *AMQP) connect() error {
+	q.client = nil
+
+	client, err := newClient(q.config)
+	if err != nil {
+		return err
+	}
+
+	q.client = client
+	q.sentMessages = 0
+
+	return err
 }
 
 func init() {
@@ -337,7 +348,6 @@ func init() {
 			Database:        DefaultDatabase,
 			RetentionPolicy: DefaultRetentionPolicy,
 			Timeout:         config.Duration(time.Second * 5),
-			connect:         connect,
 		}
 	})
 }
